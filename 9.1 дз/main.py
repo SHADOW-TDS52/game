@@ -1,3 +1,4 @@
+
 import pgzrun
 import random
 import math
@@ -22,15 +23,15 @@ score = 0
 wave = 1
 game_over = False
 
-# Списки объектов (ИСПРАВЛЕНО: теперь это пустые списки)
+# Списки объектов
 bullets = []
 enemies = []
 modules = []
 
 # Игрок
 player = Actor('player', center=(WIDTH//2, HEIGHT//2))
-player.angle = 0
 player.orbit = PLAYER_ORBIT_RADIUS
+player_angle_rad = 0  # игровой угол в радианах
 
 # Стрельба
 can_shoot = True
@@ -52,15 +53,16 @@ def create_bullet():
     if 'laser' in images:
         b = Actor('laser')
     else:
-        b = Actor('alien') # запасной спрайт, если нет laser.png
+        # запасной вариант: рисуем прямоугольник через временный Actor с простым спрайтом
+        b = Actor('alien')
         b.width = 10
         b.height = 20
     
-    px, py = get_pos_from_orbit(player.angle, player.orbit)
+    px, py = get_pos_from_orbit(player_angle_rad, player.orbit)
     b.pos = (px, py)
     
-    b.vx = math.cos(player.angle) * BULLET_SPEED
-    b.vy = math.sin(player.angle) * BULLET_SPEED
+    b.vx = math.cos(player_angle_rad) * BULLET_SPEED
+    b.vy = math.sin(player_angle_rad) * BULLET_SPEED
     b.life = 60
     
     bullets.append(b)
@@ -71,7 +73,6 @@ def create_bullet():
 def create_enemy():
     angle = random.uniform(0, 2 * math.pi)
     
-    # Проверка: есть ли картинка врага
     if 'enemy' in images:
         e = Actor('enemy')
     else:
@@ -79,24 +80,24 @@ def create_enemy():
         e.width = 30
         e.height = 30
     
-    e.angle = angle
+    e.angle_rad = angle
     e.orbit = 350
     e.speed = ENEMY_BASE_SPEED + (wave * WAVE_BONUS)
-    e.radius = max(e.width, e.height) // 2
+    e.radius = max(e.width, e.height) // 2 + 5  # небольшой запас
     enemies.append(e)
 
 def create_module():
     angle = random.uniform(0, 2 * math.pi)
-    m = Actor('player')
-    m.angle = angle
+    m = Actor('module') if 'module' in images else Actor('player')
+    m.angle_rad = angle
     m.orbit = random.randint(250, 350)
-    m.type = random.choice([0, 1, 2])
-    m.radius = 10
+    m.type = random.choice([0, 1, 2])  # 0: очки, 1: ускорение стрельбы, 2: щит
+    m.radius = 12
     modules.append(m)
 
 # --- ОСНОВНАЯ ЛОГИКА ---
 def update():
-    global score, wave, game_over, can_shoot, shoot_timer
+    global score, wave, game_over, can_shoot, shoot_timer, player_angle_rad
     
     if game_over:
         if keyboard.r:
@@ -105,9 +106,9 @@ def update():
 
     # 1. Управление игроком
     if keyboard.left or keyboard.a:
-        player.angle -= PLAYER_SPEED
+        player_angle_rad -= PLAYER_SPEED
     if keyboard.right or keyboard.d:
-        player.angle += PLAYER_SPEED
+        player_angle_rad += PLAYER_SPEED
     
     if keyboard.up or keyboard.w:
         player.orbit = max(100, min(300, player.orbit - PLAYER_ORBIT_CHANGE))
@@ -115,10 +116,10 @@ def update():
         player.orbit = max(100, min(300, player.orbit + PLAYER_ORBIT_CHANGE))
 
     # Обновляем реальную позицию игрока
-    px, py = get_pos_from_orbit(player.angle, player.orbit)
+    px, py = get_pos_from_orbit(player_angle_rad, player.orbit)
     player.pos = (px, py)
     # Поворот спрайта: +90, чтобы нос смотрел наружу
-    player.angle = math.degrees(player.angle) + 90 
+    player.angle = math.degrees(player_angle_rad) + 90 
 
     # 2. Стрельба
     if shoot_timer > 0:
@@ -130,54 +131,82 @@ def update():
         create_bullet()
 
     # 3. Обновление снарядов
-    for b in bullets[:]:
+    bullets_to_remove = []
+    for b in bullets:
         b.x += b.vx
         b.y += b.vy
         b.life -= 1
         if b.life <= 0 or not screen.rect.contains(b):
-            if b in bullets:
-                bullets.remove(b)
+            bullets_to_remove.append(b)
+    for b in bullets_to_remove:
+        bullets.remove(b)
 
     # 4. Спавн
-    if len(enemies) < 4 + wave and random.randint(1, 100) < 10:
+    # Делаем спавн реже: шанс 1 раз в ~10 кадров при 60 FPS, плюс лимит по волне
+    spawn_chance = 5 + wave * 2
+    if len(enemies) < 4 + wave and random.randint(1, 100) < spawn_chance:
         create_enemy()
-    if random.randint(1, 500) == 1:
+    if random.randint(1, 400) == 1:
         create_module()
 
     # 5. Обновление врагов
-    for e in enemies[:]:
+    enemies_to_remove = []
+    for e in enemies:
         e.orbit -= e.speed * 0.1
-        e.angle += 0.02
+        e.angle_rad += 0.02
         
-        ex, ey = get_pos_from_orbit(e.angle, e.orbit)
+        ex, ey = get_pos_from_orbit(e.angle_rad, e.orbit)
         e.pos = (ex, ey)
-        e.angle = math.degrees(e.angle)
+        e.angle = math.degrees(e.angle_rad)
 
         if e.orbit < 60:
             game_over = True
             return
 
-        # Столкновение с пулями
+        # Столкновение с пулями (сначала собираем на удаление, чтобы не ломать цикл)
         for b in bullets[:]:
             if b.colliderect(e):
-                if e in enemies: enemies.remove(e)
-                if b in bullets: bullets.remove(b)
+                if b not in bullets_to_remove:
+                    bullets_to_remove.append(b)
+                enemies_to_remove.append(e)
                 score += 10
                 break
         
-        # Столкновение с игроком
-        if player.colliderect(e):
+        # Столкновение с игроком (круговая коллизия для аккуратности)
+        dx = player.pos[0] - e.pos[0]
+        dy = player.pos[1] - e.pos[1]
+        dist_sq = dx*dx + dy*dy
+        min_dist = player.radius + e.radius if hasattr(player, 'radius') else 20 + e.radius
+        if dist_sq <= min_dist * min_dist:
             game_over = True
             return
 
+    for e in enemies_to_remove:
+        if e in enemies:
+            enemies.remove(e)
+    for b in bullets_to_remove:
+        if b in bullets:
+            bullets.remove(b)
+
     # 6. Модули
-    for m in modules[:]:
-        mx, my = get_pos_from_orbit(m.angle, m.orbit)
+    modules_to_remove = []
+    for m in modules:
+        mx, my = get_pos_from_orbit(m.angle_rad, m.orbit)
         m.pos = (mx, my)
-        if player.colliderect(m):
+        
+        # Круговая коллизия с модулем
+        dx = player.pos[0] - m.pos[0]
+        dy = player.pos[1] - m.pos[1]
+        dist_sq = dx*dx + dy*dy
+        min_dist = (player.radius if hasattr(player, 'radius') else 20) + m.radius
+        if dist_sq <= min_dist * min_dist:
             score += 50
-            if m in modules:
-                modules.remove(m)
+            modules_to_remove.append(m)
+            # Тут можно добавить эффекты: ускорение стрельбы, щит и т.п.
+    
+    for m in modules_to_remove:
+        if m in modules:
+            modules.remove(m)
 
     # Прогресс волн
     if score > wave * 50:
@@ -213,7 +242,7 @@ def draw():
         screen.draw.text("Нажми R для рестарта", center=(WIDTH//2, HEIGHT//2 + 30), fontsize=30, color=(255, 255, 255))
 
 def reset_game():
-    global score, wave, game_over, bullets, enemies, modules, player
+    global score, wave, game_over, bullets, enemies, modules, player, player_angle_rad
     score = 0
     wave = 1
     game_over = False
@@ -221,7 +250,10 @@ def reset_game():
     enemies = []
     modules = []
     player.orbit = PLAYER_ORBIT_RADIUS
-    player.angle = 0
-    player.pos = (WIDTH//2, HEIGHT//2)
+    player_angle_rad = 0
+    px, py = get_pos_from_orbit(player_angle_rad, player.orbit)
+    player.pos = (px, py)
+    player.angle = 90
 
 pgzrun.go()
+    
